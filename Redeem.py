@@ -675,7 +675,7 @@ async def redeem_code(driver, player_id: str, code: str, interaction: discord.In
             await interaction.followup.send(embed=embed)
         
         except TimeoutException:
-            return "⌛ Timeout: Tidak menerima respon hasil redeem"
+            return "⌛ Timeout: invalid receiving redeem response!"
         
         except Exception as e:
             return f"⚠️ Error Sistem: {str(e)}"
@@ -683,26 +683,22 @@ async def redeem_code(driver, player_id: str, code: str, interaction: discord.In
         print(f"{player_id}: Done")
 
     except Exception as e:
-        await bot.loop.run_in_executor(
-            None,
-            lambda: driver.save_screenshot('fatal_error.png')
-        )
         return f"💀 Fatal Error: {str(e)}"
 
 # SLASH COMMANDS
 @bot.tree.command(
     name="redeem",
-    description="Redeem kode hadiah Whiteout Survival",
+    description="Reedem your Whiteout Survival gift-code with this command.",
     guild=discord.Object(id=OSBC))
 
 @app_commands.describe(
-    player_id="ID Pemain kamu",
-    code="Kode redeem hadiah"
+    player_id="your Player ID",
+    code="your Gift-code"
 )
 async def slash_redeem(interaction: discord.Interaction, player_id: str, code: str):
     if interaction.channel.id not in CHANNEL_ID:
         await interaction.response.send_message(
-            "❌ Perintah hanya bisa digunakan di channel khusus!",
+            "❌ Survy commands can only be used on certain channel!",
             ephemeral=True
         )
         return
