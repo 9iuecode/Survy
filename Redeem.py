@@ -17,7 +17,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 # KONFIGURASI
-token = 'MTM2NDU1OTQ2OTE5OTIzMzAyNA.GrNrhK.M9c_rw9dqPrS7_Ga9_-_HFsiR63vToYvCw8cqg'
+token = 'MTM2NDU1OTQ2OTE5OTIzMzAyNA.GnYn2P.zCqIVKgs3tyvvRAA7sAX1g32e_Hs85NNq4G0v8'
 CHANNEL_ID = [1364460757084930101]
 GUILD_ID = 1095916483370029128
 REDEEM_URL = 'https://wos-giftcode.centurygame.com/'
