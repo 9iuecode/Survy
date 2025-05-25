@@ -23,7 +23,7 @@ from selenium.common.exceptions import TimeoutException
 load_dotenv()
 dc_token = os.getenv("token")
 CHANNEL_ID = [1364460757084930101]
-GUILD_ID = 1095916483370029128
+OSBC = 1095916483370029128
 REDEEM_URL = 'https://wos-giftcode.centurygame.com/'
 
 # BOT SETUP
@@ -693,7 +693,7 @@ async def redeem_code(driver, player_id: str, code: str, interaction: discord.In
 @bot.tree.command(
     name="redeem",
     description="Redeem kode hadiah Whiteout Survival",
-    guild=discord.Object(id=GUILD_ID))
+    guild=discord.Object(id=OSBC))
 
 @app_commands.describe(
     player_id="ID Pemain kamu",
@@ -717,18 +717,19 @@ async def slash_redeem(interaction: discord.Interaction, player_id: str, code: s
         return
     finally:
         await bot.loop.run_in_executor(None, driver.quit)
+
 # Discord Commands
 @bot.event
 async def on_ready():
-    print(f'Bot {bot.user.name} siap digunakan!')
+    print(f'{bot.user.name} is ready to serve!')
     try:
-        # Sync command ke guild tertentu
-        guild = discord.Object(id=GUILD_ID)
+        # Sync to a certain GUILD
+        guild = discord.Object(id=OSBC)
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
-        print(f" Slash commands tersinkronisasi untuk guild {GUILD_ID}")
+        print(f" Slash command has syncronized with OSBC server!")
     except Exception as e:
-        print(f"❌ Gagal sync commands: {e}")
+        print(f"❌ Failed to syncronize: {e}")
 
 if __name__ == '__main__':
     bot.run(dc_token)
