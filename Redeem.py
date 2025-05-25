@@ -1,6 +1,8 @@
 import discord
 import asyncio
 import traceback
+import os
+from dotenv import load_dotenv
 from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
@@ -16,8 +18,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+
 # KONFIGURASI
-token = 'MTM2NDU1OTQ2OTE5OTIzMzAyNA.GnYn2P.zCqIVKgs3tyvvRAA7sAX1g32e_Hs85NNq4G0v8'
+load_dotenv()
+dc_token = os.getenv("token")
 CHANNEL_ID = [1364460757084930101]
 GUILD_ID = 1095916483370029128
 REDEEM_URL = 'https://wos-giftcode.centurygame.com/'
@@ -727,4 +731,4 @@ async def on_ready():
         print(f"❌ Gagal sync commands: {e}")
 
 if __name__ == '__main__':
-    bot.run(token)
+    bot.run(dc_token)
