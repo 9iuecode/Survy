@@ -1,0 +1,775 @@
+import discord
+import asyncio
+import traceback
+import os
+import sqlite3
+from pathlib import Path
+from datetime import datetime
+from discord.ext import commands
+from discord import app_commands, ui
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from concurrent.futures import ThreadPoolExecutor
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import TimeoutException
+from typing import Dict, List
+
+class GroupRedeem(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.CHANNEL_ID = [1364460757084930101]
+        self.OSBC = 1095916483370029128
+        self.REDEEM_URL = 'https://wos-giftcode.centurygame.com/'
+        self.db_path = Path('data/group_redeem.db')
+
+        os.makedirs('data', exist_ok=True)
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_groups (
+                    user_id TEXT NOT NULL,
+                    group_name TEXT NOT NULL,
+                    player_ids TEXT NOT NULL,
+                    PRIMARY KEY (user_id, group_name)
+                )
+            """)
+            conn.commit()
+    
+    async def load_user_groups(self, user_id: str) -> Dict[str, List[str]]:
+        groups = {}
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT group_name, player_ids FROM user_groups WHERE user_id = ?",
+                (user_id,)
+            )
+            for group_name, ids_str in cursor.fetchall():
+                groups[group_name] = ids_str.split(',')
+        return groups
+    
+    async def save_user_group(self, user_id: str, group_name: str, player_ids: List[str]):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO user_groups (user_id, group_name, player_ids)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, group_name, ','.join(player_ids))
+            )
+            conn.commit()
+    
+    async def delete_user_group(self, user_id: str, group_name: str):
+        """Delete a user group"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM user_groups WHERE user_id = ? AND group_name = ?",
+                (user_id, group_name)
+            )
+            conn.commit()
+    
+    def setup_driver(self):
+        options = webdriver.ChromeOptions()
+        options.add_argument('--headless=new')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--window-size=1920x1080')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    
+        driver = webdriver.Chrome(
+            service=Service(ChromeDriverManager().install()),
+            options=options
+        )
+        driver.set_page_load_timeout(30)
+        return driver
+    
+    async def execute_group_redemption(self, interaction: discord.Interaction, user_id: str, group_name: str, code: str):
+        if user_id not in self.user_groups or group_name not in self.user_groups[user_id]:
+            await interaction.followup.send("❌ Group not found!", ephemeral=True)
+            return
+        
+        group_ids = self.user_groups[user_id][group_name]
+        driver = None
+        
+        try:
+            results = []
+            await interaction.followup.send(f"🔄 Starting to redeem for {len(group_ids)} ID...", ephemeral=True)
+            
+            for player_id in group_ids:
+                driver = self.setup_driver()
+                debug_folder = f"debug_{interaction.id}"
+                os.makedirs(debug_folder, exist_ok=True)
+                
+                try:
+                    await interaction.followup.send(f"🆔 Processing ID: {player_id}", ephemeral=True)
+                    await asyncio.sleep(1)
+                    
+                    await interaction.followup.send("🌐 Opening website page", ephemeral=True)
+                    if not await self.open_website(driver):
+                        results.append(f"❌ {player_id}: Failed opening website")
+                        continue
+                    
+                    await interaction.followup.send("📥 inputting player ID", ephemeral=True)
+                    if not await self.input_player_id(driver, player_id):
+                        results.append(f"❌ {player_id}: Invalid ID")
+                        continue
+                    
+                    await interaction.followup.send("🚪 Logging-in", ephemeral=True)
+                    if not await self.login(driver):
+                        results.append(f"❌ {player_id}: Failed to login")
+                        continue
+                    
+                    await interaction.followup.send("🎁 inputting gift-code", ephemeral=True)
+                    if not await self.input_gift_code(driver, code):
+                        results.append(f"❌ {player_id}: Kode gift tidak valid")
+                        continue
+                    
+                    await interaction.followup.send("🛡️ Processing captcha", ephemeral=True)
+                    captcha_result = await self.captcha_solver(driver, interaction)
+                    if not captcha_result:
+                        results.append(f"❌ {player_id}: Gagal captcha")
+                        continue
+                    
+                    await interaction.followup.send("☑️ Confirming redemption", ephemeral=True)
+                    if not await self.confirm_for_redeem(driver):
+                        results.append(f"❌ {player_id}: Gagal konfirmasi")
+                        continue
+                    
+                    
+                    result_element = await self.find_element(driver, [
+                        '//p[contains(text(), "Redeemed")]',
+                        '//p[contains(text(), "Already claimed")]',
+                        '//p[contains(text(), "Please log in")]',
+                        '//p[contains(text(), "Incorrect code")]',
+                        '//p[contains(text(), "Code expired")]',
+                        '//p[contains(text(), "Gift Code not found")]',
+                        '//p[contains(text(), "Expired")]',
+                        '//p[contains(text(), "Claim limit")]'
+                    ], 'purple')
+
+                    if not result_element:
+                        results.append(f"❌ {player_id}: Tidak bisa menemukan hasil redeem")
+                        continue
+                    
+                    
+                    message_text = await self.bot.loop.run_in_executor(
+                        None,
+                        lambda: result_element.get_attribute('textContent').strip()
+                    )
+                    
+                    status_map = {
+                        'Redeemed': '✅ Successfull redeemed',
+                        'already': '❌ Already claimed',
+                        'not found': '❌ Gift-code not found',
+                        'Expired': '❌ Expired gift-code',
+                        'Claim limit': '❌ Gift-code has reached limit'
+                    }
+                    
+                    detected_status = "⚠️ Unknown status"
+                    for keyword, status in status_map.items():
+                        if keyword.lower() in message_text.lower():
+                            detected_status = status
+                            break
+                    
+                    try:
+                        player_name = await self.bot.loop.run_in_executor(
+                            None,
+                            lambda: driver.find_element(By.XPATH, '//p[contains(@class, "name")]').text
+                        )
+                    except:
+                        player_name = "Unknown"
+                    
+                    results.append(f"{detected_status} - {player_name} (`{player_id}`)")
+                    
+                except Exception as e:
+                    results.append(f"💀 {player_id}: Error - {str(e)}")
+                    traceback.print_exc()
+                finally:
+                    if driver:
+                        await self.bot.loop.run_in_executor(None, driver.quit)
+                    await asyncio.sleep(2)
+
+            await interaction.followup.send("🪄 Preparing redeem results", ephemeral=True)
+            embed = discord.Embed(
+                title=f"Hasil Redeem Group {group_name}",
+                description="\n".join(results),
+                color=discord.Color.green() if any("✅" in r for r in results) else discord.Color.red()
+            )
+            await interaction.followup.send(embed=embed)
+            
+        except Exception as e:
+            await interaction.followup.send(
+                f"💀 Error fatal: {str(e)}",
+                ephemeral=True
+            )
+            traceback.print_exc()
+        finally:
+            if driver:
+                await self.bot.loop.run_in_executor(None, driver.quit)
+
+    async def _take_screenshot(self, driver, filename):
+        try:
+            await self.bot.loop.run_in_executor(
+                None,
+                lambda: driver.save_screenshot(filename)
+            )
+            print(f"Debug: Screenshot saved as {filename}")
+        except Exception as e:
+            print(f"Failed to take screenshot: {e}")
+
+    async def _send_debug_screenshots(self, interaction, folder, player_id):
+        try:
+            files = []
+            for file in os.listdir(folder):
+                if f"_{player_id}.png" in file:
+                    files.append(discord.File(f"{folder}/{file}"))
+            
+            if files:
+                await interaction.followup.send(
+                    f"📷 Screenshots debug for ID {player_id}:",
+                    files=files,
+                    ephemeral=True
+                )
+                
+                for file in files:
+                    os.remove(file.filename)
+        except Exception as e:
+            print(f"Failed to send screenshot: {e}")
+    
+    class GroupList(ui.Select):
+        def __init__(self, groups: Dict[str, List[str]]):
+            options = [
+                discord.SelectOption(
+                    label=group_name,
+                    description=f"{len(ids)} IDs",
+                    value=group_name
+                ) for group_name, ids in groups.items()
+            ]
+
+            super().__init__(
+                placeholder="Select a group...",
+                options=options,
+                max_values=1
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            user_id = str(interaction.user.id)
+            group_name = self.values[0]
+            user_groups = await cog.load_user_groups(user_id)
+            group_data = user_groups.get(group_name, [])
+
+            embed = discord.Embed(
+                title=f"{group_name} Group",
+                color=discord.Color.yellow()
+            )
+
+            embed.add_field(
+                name="Members IDs",
+                value="\n".join(f"`{player_ids}`" for player_ids in group_data) or "No IDs",
+                inline=False
+            )
+
+            view = cog.GroupActionView(group_name)
+            await interaction.response.edit_message(
+                embed=embed,
+                view=view
+            )
+
+    class CreateGroupModal(ui.Modal, title="Create New Group"):
+        group_name = ui.TextInput(
+            label="Group Name", 
+            placeholder="Example: Team ABC",
+            max_length=30)
+        
+        player_ids = ui.TextInput(
+            label="Player IDs with (',') max 10",
+            placeholder="Example: 1234567,1234589",
+            style=discord.TextStyle.paragraph,
+            max_length=200
+        )
+
+        async def on_submit(self, interaction: discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            user_id = str(interaction.user.id)
+
+            if not self.group_name.value.strip():
+                await interaction.response.send_message(
+                    "❌ Group name cannot be empty!",
+                    ephemeral=True
+            )
+                return
+
+            raw_ids = [id.strip() for id in self.player_ids.value.split(',')]
+            id_list = []
+            
+            for player_id in raw_ids[:10]:
+                if player_id and player_id.isdigit() and len(player_id) >= 7:
+                    id_list.append(player_id)
+                else:
+                    await interaction.response.send_message(
+                        f"⚠️ Removed invalid ID: {player_id}",
+                        ephemeral=True
+                    )
+            
+            if not id_list:
+                await interaction.response.send_message(
+                    "❌ No valid player IDs provided!",
+                    ephemeral=True
+            )
+                return
+            
+            try:
+                existing_groups = await cog.load_user_groups(user_id)
+                
+                
+                if self.group_name.value.strip() in existing_groups:
+                    await interaction.response.send_message(
+                        f"❌ Group name '{self.group_name.value}' already exists!",
+                        ephemeral=True
+                    )
+                    return
+                
+                await cog.save_user_group(
+                    user_id=str(interaction.user.id),
+                    group_name=self.group_name.value.strip(),
+                    player_ids=id_list
+                )
+
+                await interaction.response.send_message(
+                    f"✅ Group **{self.group_name.value}** created with {len(id_list)} IDs!",
+                    ephemeral=True
+                )
+            except Exception as e:
+                await interaction.response.send_message(
+                    f"❌ Failed to create group: {str(e)}",
+                    ephemeral=True
+                )
+                traceback.print_exc()
+
+    class GroupActionView(ui.View):
+        def __init__(self, group_name: str):
+            super().__init__()
+            self.group_name = group_name
+
+            self.add_item(ui.Button(
+                style=discord.ButtonStyle.green,
+                label="Redeem",
+                emoji="🎁",
+                custom_id=f"redeem_{group_name}"
+            ))
+
+            self.add_item(ui.Button(
+                style=discord.ButtonStyle.blurple,
+                label="Edit",
+                emoji="✏️",
+                custom_id=f"edit_{group_name}"
+            ))
+
+            self.add_item(ui.Button(
+                style=discord.ButtonStyle.red,
+                label="Delete",
+                emoji="🗑️",
+                custom_id=f"delete_{group_name}"
+            ))
+
+    class GroupSelection(ui.Select):
+        def __init__(self, groups: List[str]):
+            options = [
+                discord.SelectOption(label="Create a group", value="new", emoji="🆕"),
+                discord.SelectOption(label="Group list", value="list", emoji="📃")
+            ]
+            super().__init__(placeholder="Select action...", options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            if self.values[0] == "new":
+                await interaction.response.send_modal(cog.CreateGroupModal())
+            
+            elif self.values[0] == "list":
+                user_groups = await cog.load_user_groups(str(interaction.user.id))
+                if not user_groups:
+                    await interaction.response.send_message(
+                        "❌ You don't have any groups yet!",
+                        ephemeral=True
+                    )
+                    return
+
+                view = ui.View()
+                view.add_item(cog.GroupList(user_groups))
+                await interaction.response.send_message(
+                    "📋 Select a group to view details:",
+                    view=view,
+                    ephemeral=True
+                )
+    class GroupRedeemModal(ui.Modal, title="Group Redemption"):
+        def __init__(self, cog, user_id: str, group_name: str):
+            super().__init__()
+            self.cog = cog
+            self.user_id = user_id
+            self.group_name = group_name
+            self.code = ui.TextInput(
+                label="Gift Code",
+                placeholder="Enter the gift code to redeem",
+                max_length=20
+            )
+            self.add_item(self.code)
+
+        async def on_submit(self, interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            
+            await self.cog.execute_group_redemption(
+                interaction=interaction,
+                user_id=self.user_id,
+                group_name=self.group_name,
+                code=self.code.value
+            )
+                
+
+    @app_commands.command(
+        name="gredeem",
+        description="Make a group and do multiple redeem in one command"
+    )
+    async def group_redeem(self, interaction: discord.Interaction):
+        if interaction.channel.id not in self.CHANNEL_ID:
+            await interaction.response.send_message(
+                "❌ Command can only be used in specific channels!",
+                ephemeral=True
+            )
+            return
+
+        user_groups = await self.load_user_groups(str(interaction.user.id))
+        view = ui.View()
+        view.add_item(self.GroupSelection(list(user_groups.keys())))
+        
+        await interaction.response.send_message(
+            "🎪 Group Redeem System - Select an option:",
+            view=view,
+            ephemeral=True
+        )
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        try:
+            if not interaction.data or "custom_id" not in interaction.data:
+                return
+
+            custom_id = interaction.data["custom_id"]
+            user_id = str(interaction.user.id)
+
+            if custom_id.startswith("redeem_"):
+                group_name = custom_id[7:]
+                if user_id not in self.load_user_groups or group_name not in self.load_user_groups[user_id]:
+                    await interaction.response.send_message("❌ Group not found!", ephemeral=True)
+                    return
+                
+                await interaction.response.send_modal(self.GroupRedeemModal(self, user_id, group_name))
+            
+            elif custom_id.startswith("edit_"):
+                await self._handle_edit_group(interaction, user_id, custom_id[5:])
+            
+            elif custom_id.startswith("delete_"):
+                await self._handle_delete_group(interaction, user_id, custom_id[7:])
+                
+        except Exception as e:
+            print(f"Error handling interaction: {e}")
+            traceback.print_exc()
+
+    # ========== SUPPORT FUNCTIONS ===========
+    async def send_message(self, content: str, interaction: discord.Interaction = None, ephemeral: bool = True):
+        """Fungsi terpadu untuk mengirim pesan"""
+        try:
+            if interaction:
+                if interaction.response.is_done():
+                    await interaction.followup.send(content, ephemeral=ephemeral)
+                else:
+                    await interaction.response.send_message(content, ephemeral=ephemeral)
+            else:
+                channel = self.bot.get_channel(self.CHANNEL_ID[0])
+                await channel.send(content)
+            return True
+        except Exception as e:
+            print(f"Error sending message: {e}")
+            return False
+    
+    async def send_file(self, file_path: str, interaction: discord.Interaction):
+        """Fungsi untuk mengirim file ke Discord"""
+        try:
+            with open(file_path, 'rb') as f:
+                if interaction.response.is_done():
+                    await interaction.followup.send(file=discord.File(f))
+                else:
+                    await interaction.response.send_message(file=discord.File(f))
+            return True
+        except Exception as e:
+            print(f"Error sending file: {e}")
+            await self.send_message("❌ Failed to send file!", interaction)
+            return False
+        
+    async def web_page_load(self, driver):
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: WebDriverWait(driver, 30).until(
+                lambda d: d.execute_script('return document.readyState') == 'complete'
+            )
+        )
+    
+    async def find_element(self, driver, selectors, highlight_color='red'):
+        for selector in selectors:
+            try:
+                elements = await self.bot.loop.run_in_executor(
+                    None,
+                    lambda s=selector: driver.find_elements(By.XPATH, s)
+                )
+                
+                if elements:
+                    await self.bot.loop.run_in_executor(
+                        None,
+                        lambda e=elements[0]: driver.execute_script(
+                            f"arguments[0].style.border='3px solid {highlight_color}';", e)
+                    )
+                    return elements[0]
+            except:
+                continue
+        return None
+    
+    async def input_text(self, driver, element, text):
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: driver.execute_script("""
+                arguments[0].click();
+                arguments[0].value = '';
+            """, element)
+        )
+        await asyncio.sleep(0.5)
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: element.send_keys(text)
+        )
+    
+    async def mouse_movement(self, driver, x=150, y=300):
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: driver.execute_script(f"""
+                window.scrollTo(0, {y});
+                const mouseMoveEvent = new MouseEvent('mousemove', {{
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: {x},
+                    clientY: {y}
+                }});
+                document.dispatchEvent(mouseMoveEvent);
+            """)
+        )
+        await asyncio.sleep(1)
+
+    # ========== MAIN FUNCTIONS ===========
+    async def open_website(self, driver):
+        await self.bot.loop.run_in_executor(None, lambda: driver.get(self.REDEEM_URL))
+        await asyncio.sleep(2)
+        return True
+        
+    
+    async def input_player_id(self, driver, player_id):
+        await self.web_page_load(driver)
+        await self.mouse_movement(driver, 100, 200)
+
+        id_field = await self.find_element(driver, [
+            '//input[@data-v-781897ff]',
+            '//input[@placeholder="Player ID"]',
+            '//input[contains(@id,"player")]',
+            '//input[@type="text"][@maxlength="10"]'
+        ], 'red')
+
+        if not id_field:
+            print("ID Selector Not Found")
+            return False
+        
+        await self.input_text(driver, id_field, player_id)
+        print(f"Id: {player_id} is available!")
+        
+        # Custom scroll and hover
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: driver.execute_script("""
+                window.scrollTo({
+                    top: document.body.scrollHeight/3,
+                    behavior: 'smooth'
+                });
+                const hoverEvent = new MouseEvent('mouseover', {
+                    bubbles: true,
+                    cancelable: true
+                });
+                arguments[0].dispatchEvent(hoverEvent);
+            """, id_field) 
+        )
+        await asyncio.sleep(1.5)
+        return True
+    
+    async def login(self, driver):
+        await self.web_page_load(driver)
+
+        login_button = await self.find_element(driver, [
+            '//button[@data-v-781897ff]',
+            '//button[@class="btn login_btn"]',
+            '//button[contains(@class,"btn login_btn")]',
+            '//span[@data-v-781897ff]',
+            '//span[contains(text(), "Login")]'
+        ], 'lime')
+
+        if not login_button:
+            print("Login Selector Not Found")
+            return False
+        
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: driver.execute_script("""
+                const btn = arguments[0];
+                btn.click();
+                setTimeout(() => {
+                    btn.style.boxShadow = 'none';
+                }, 1000);
+            """, login_button)
+        )
+        await asyncio.sleep(2)
+
+        await self.bot.loop.run_in_executor(
+            None,
+            lambda: WebDriverWait(driver, 20).until(
+                EC.invisibility_of_element_located((By.XPATH, '//input[@placeholder="Player ID"]'))
+            )
+        )
+        print("Log-in successful!")
+        await asyncio.sleep(1.5)
+        return True
+    
+    async def input_gift_code(self, driver, code):
+        await self.web_page_load(driver)
+        await self.mouse_movement(driver)
+
+        code_field = await self.find_element(driver, [
+            '//input[@data-v-781897ff]',
+            '//input[@class="input_wrap"]',
+            '//input[@placeholder="Enter Gift Code"]',
+            '//input[@type="text"][@maxlength="20"]'
+        ], 'green')
+
+        if not code_field:
+            print("GiftCode Selector Not Found")
+            return False
+        
+        await self.input_text(driver, code_field, code)
+        print(f"Successfully input: {code} as a gift code!")
+        await asyncio.sleep(2)
+        return True
+    
+    async def captcha_solver(self, driver, interaction):
+        try:
+            captcha_element = await self.find_element(driver, [
+                '//img[contains(@src, "data:image") and contains(@class, "verify")]',
+                '//img[contains(@src, "jpeg;base64")]',
+                '//div[contains(@class, "captcha")]//img',
+                '//img[@alt="captcha"]',
+                '//div[@data-v-781897ff]//img'
+            ], 'yellow')
+
+            if not captcha_element:
+                await self.send_message("❌ Could not find captcha element!", interaction)
+                return False
+            
+            captcha_file = 'captcha.png'
+            try:
+                await self.bot.loop.run_in_executor(
+                    None,
+                    lambda: captcha_element.screenshot(captcha_file)
+                )
+                
+                if not os.path.exists(captcha_file):
+                    await self.send_message("❌ Failed to create captcha image!", interaction)
+                    return False
+                    
+                await self.send_file(captcha_file, interaction)
+                await self.send_message("⌛ Please enter the 4-digit captcha code within 60 seconds...", interaction)
+                
+            except Exception as e:
+                print(f"Error saving captcha: {e}")
+                await self.send_message("❌ Error processing captcha image!", interaction)
+                return False
+
+            def check(m):
+                return m.author == interaction.user and m.channel == interaction.channel
+            
+            try:
+                msg = await self.bot.wait_for('message', timeout=60.0, check=check)
+                final_text = msg.content.strip()[:4]
+                
+                if len(final_text) != 4:
+                    await self.send_message("⚠️ Invalid format! Please enter exactly 4 characters!", interaction)
+                    return None
+                
+                if not final_text.isalnum():
+                    await self.send_message("⚠️ Only letters and numbers are allowed!", interaction)
+                    return None
+                
+                input_field = await self.find_element(driver, [
+                    '//input[contains(@placeholder, "Enter verification code")]',
+                    '//input[@type="text" and @maxlength="4"]'
+                ])
+                
+                if not input_field:
+                    await self.send_message("❌ Could not find captcha input field!", interaction)
+                    return None
+
+                await self.input_text(driver, input_field, final_text)
+                return final_text
+
+            except asyncio.TimeoutError:
+                await self.send_message("⏰ Timeout! No captcha input received.", interaction)
+                return None
+            
+        except Exception as e:
+            print(f"Captcha solver error: {traceback.format_exc()}")
+            await self.send_message("💀 Error in captcha process!", interaction)
+            return None
+        finally:
+            if os.path.exists(captcha_file):
+                try:
+                    os.remove(captcha_file)
+                except:
+                    pass
+        
+    async def confirm_for_redeem(self, driver):
+        confirm_button = await self.find_element(driver, [
+            '//*[contains(@class, "btn exchange_btn") and contains(text(), "Confirm")]',
+            '//div[contains(@class, "btn exchange_btn") and contains(text(), "Confirm")]'
+        ], 'lime')
+
+        await self.bot.loop.run_in_executor(None, lambda: driver.execute_script("arguments[0].click();", confirm_button))
+        await asyncio.sleep(2)
+        
+        try:
+            await self.bot.loop.run_in_executor(
+                None,
+                lambda: WebDriverWait(driver, 5).until(EC.staleness_of(confirm_button))
+            )
+            print("Confirm button pressed!")
+            return True
+        except:
+            actions = ActionChains(driver)
+            await self.bot.loop.run_in_executor(
+                None,
+                lambda: actions.move_to_element(confirm_button).click().perform()
+            )
+            await asyncio.sleep(0.5)
+            return True
+
+    
+
+async def setup(bot):
+    await bot.add_cog(GroupRedeem(bot))
