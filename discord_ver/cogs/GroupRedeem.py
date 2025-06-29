@@ -89,11 +89,12 @@ class GroupRedeem(commands.Cog):
         return driver
     
     async def execute_group_redemption(self, interaction: discord.Interaction, user_id: str, group_name: str, code: str):
-        if user_id not in self.user_groups or group_name not in self.user_groups[user_id]:
+        user_groups = await self.load_user_groups(user_id)
+        if group_name not in user_groups:
             await interaction.followup.send("❌ Group not found!", ephemeral=True)
             return
         
-        group_ids = self.user_groups[user_id][group_name]
+        group_ids = user_groups.get(group_name, [])
         driver = None
         
         try:
@@ -464,10 +465,11 @@ class GroupRedeem(commands.Cog):
 
             if custom_id.startswith("redeem_"):
                 group_name = custom_id[7:]
-                if user_id not in self.load_user_groups or group_name not in self.load_user_groups[user_id]:
+                user_groups = await self.load_user_groups(user_id)
+                if group_name not in user_groups:
                     await interaction.response.send_message("❌ Group not found!", ephemeral=True)
                     return
-                
+            
                 await interaction.response.send_modal(self.GroupRedeemModal(self, user_id, group_name))
             
             elif custom_id.startswith("edit_"):
