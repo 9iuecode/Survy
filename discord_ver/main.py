@@ -23,21 +23,21 @@ class SurvyApp(commands.Bot):
         )
     
     async def setup_hook(self):
-        # Load Cogs
+        
         cogsdir = os.path.join(BASEDIR, 'cogs')
         for filename in os.listdir(cogsdir):
             if filename.endswith('.py') and not filename.startswith('_'):
                 await self.load_extension(f'cogs.{filename[:-3]}')
                 print(f'{filename} loaded!')
 
-        # Sync Commands
+        
         guild = discord.Object(id=int(os.getenv("OSBC")))
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
 
 bot = SurvyApp()
 
-# Menu Utama
+
 @bot.tree.command(
     name="menu",
     description="Showing all about Survy's command"
@@ -85,7 +85,7 @@ async def redeem_menu(interaction: discord.Interaction):
         color=discord.Color.gold()
     )
     embed.set_author(name="Survy REDEEM", icon_url="https://i.imgur.com/XKb9U3D.jpeg")
-    # Personal Redeem
+    
     embed.add_field(
         name="👤 Personal Redeem",
         value="`/predeem <player_id> <code>`\n"
@@ -94,9 +94,9 @@ async def redeem_menu(interaction: discord.Interaction):
     )
     # Group Redeem
     embed.add_field(
-        name="👥 Group Redeem (Coming Soon)",
+        name="👥 Group Redeem",
         value="`/gredeem <id1,id2,...> <code>`\n"
-              "Coming Soon",
+              "Example: `/gredeem 12345,67891 ABCDEF`",
         inline=False
     )
     

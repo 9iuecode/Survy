@@ -3,8 +3,8 @@ import asyncio
 import traceback
 import os
 import sqlite3
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from discord.ext import commands
 from discord import app_commands, ui
 from selenium import webdriver
@@ -13,9 +13,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-from concurrent.futures import ThreadPoolExecutor
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import TimeoutException
 from typing import Dict, List
 
 class GroupRedeem(commands.Cog):
@@ -93,68 +91,59 @@ class GroupRedeem(commands.Cog):
         if group_name not in user_groups:
             await interaction.followup.send("❌ Group not found!", ephemeral=True)
             return
-        
+        mention = interaction.user.mention
         group_ids = user_groups.get(group_name, [])
         driver = None
         
         try:
             results = []
-            await interaction.followup.send(f"🔄 Starting to redeem for {len(group_ids)} ID...", ephemeral=True)
-            
+            await interaction.channel.send(f"🤖 |**`STARTING TO REDEEM`**\n😇 |`PLEASE WAIT AND FOLLOW OUR INSTRUCTIONS,` {mention}")            
             for player_id in group_ids:
                 driver = self.setup_driver()
-                debug_folder = f"debug_{interaction.id}"
-                os.makedirs(debug_folder, exist_ok=True)
                 
                 try:
-                    await interaction.followup.send(f"🆔 Processing ID: {player_id}", ephemeral=True)
-                    await asyncio.sleep(1)
+                    await interaction.channel.send(f"🆔 |`PROCESSING ID: {player_id}`\n🏂 |`HERE YOU GO ~`")
+                    await asyncio.sleep(0.5)
                     
-                    await interaction.followup.send("🌐 Opening website page", ephemeral=True)
                     if not await self.open_website(driver):
                         results.append(f"❌ {player_id}: Failed opening website")
                         continue
                     
-                    await interaction.followup.send("📥 inputting player ID", ephemeral=True)
                     if not await self.input_player_id(driver, player_id):
                         results.append(f"❌ {player_id}: Invalid ID")
                         continue
                     
-                    await interaction.followup.send("🚪 Logging-in", ephemeral=True)
                     if not await self.login(driver):
                         results.append(f"❌ {player_id}: Failed to login")
                         continue
                     
-                    await interaction.followup.send("🎁 inputting gift-code", ephemeral=True)
                     if not await self.input_gift_code(driver, code):
-                        results.append(f"❌ {player_id}: Kode gift tidak valid")
+                        results.append(f"❌ {player_id}: Invalid gift code")
                         continue
                     
-                    await interaction.followup.send("🛡️ Processing captcha", ephemeral=True)
                     captcha_result = await self.captcha_solver(driver, interaction)
                     if not captcha_result:
-                        results.append(f"❌ {player_id}: Gagal captcha")
+                        results.append(f"❌ {player_id}: Invalid captcha")
                         continue
                     
-                    await interaction.followup.send("☑️ Confirming redemption", ephemeral=True)
                     if not await self.confirm_for_redeem(driver):
-                        results.append(f"❌ {player_id}: Gagal konfirmasi")
+                        results.append(f"❌ {player_id}: Failed to confirm")
                         continue
                     
                     
                     result_element = await self.find_element(driver, [
-                        '//p[contains(text(), "Redeemed")]',
-                        '//p[contains(text(), "Already claimed")]',
-                        '//p[contains(text(), "Please log in")]',
-                        '//p[contains(text(), "Incorrect code")]',
-                        '//p[contains(text(), "Code expired")]',
-                        '//p[contains(text(), "Gift Code not found")]',
-                        '//p[contains(text(), "Expired")]',
-                        '//p[contains(text(), "Claim limit")]'
+                        '//p[contains(text(), "Redeemed, please claim the rewards in your mail!")]',
+                        '//p[contains(text(), "Already claimed, unable to claim again.")]',
+                        '//p[contains(text(), "Please log in to relevant character before redemption.")]',
+                        '//p[contains(text(), "Incorrect code, please retry the verification.")]',
+                        '//p[contains(text(), "Code expired, please retry the verification.")]',
+                        '//p[contains(text(), "Gift Code not found, this is case-sensitive!")]',
+                        '//p[contains(text(), "Expired, unable to claim.")]',
+                        '//p[contains(text(), "Claim limit reached, unable to claim.")]'
                     ], 'purple')
 
                     if not result_element:
-                        results.append(f"❌ {player_id}: Tidak bisa menemukan hasil redeem")
+                        results.append(f"❌ {player_id}: Cannot find redeem result")
                         continue
                     
                     
@@ -164,11 +153,14 @@ class GroupRedeem(commands.Cog):
                     )
                     
                     status_map = {
-                        'Redeemed': '✅ Successfull redeemed',
-                        'already': '❌ Already claimed',
-                        'not found': '❌ Gift-code not found',
-                        'Expired': '❌ Expired gift-code',
-                        'Claim limit': '❌ Gift-code has reached limit'
+                        'Redeemed': '✅ **Successful**: Gift code redeemed.',
+                        'Code expired': '❌ **Error**: Captcha code expired.',
+                        'Incorrect': '❌ **Error**: Captcha code incorrect.',
+                        'Please': '⚠️ **Warning**: Please relog-in with correct character!',
+                        'already': '❎ **Error**: Code was already claimed.',
+                        'not found': '❓ **Error**: Gift code was not found.',
+                        'Expired': '✖️ **Error**: Gift code expired, unable to claim.',
+                        'Claim': '✖️ **Error**: Claim limit reached.'
                     }
                     
                     detected_status = "⚠️ Unknown status"
@@ -191,17 +183,27 @@ class GroupRedeem(commands.Cog):
                     results.append(f"💀 {player_id}: Error - {str(e)}")
                     traceback.print_exc()
                 finally:
+                    await interaction.channel.send(f"✅ |`{player_id} IS DONE`")
                     if driver:
                         await self.bot.loop.run_in_executor(None, driver.quit)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(0.5)
 
-            await interaction.followup.send("🪄 Preparing redeem results", ephemeral=True)
             embed = discord.Embed(
-                title=f"Hasil Redeem Group {group_name}",
+                title=f"{group_name} GROUP RESULTS:",
                 description="\n".join(results),
                 color=discord.Color.green() if any("✅" in r for r in results) else discord.Color.red()
             )
-            await interaction.followup.send(embed=embed)
+            embed.set_author(
+                name="Survy REDEEM",
+                icon_url="https://i.imgur.com/XKb9U3D.jpeg"
+            )
+            hari = datetime.now().strftime("%d/%m/%Y")
+            jam = datetime.now().strftime("%H:%M:%S")
+            embed.set_footer(
+                text=f"Date: {hari}\nTime: {jam}\n💖 Thank you for using Survy, have a great day! 💖"
+            )
+            await interaction.channel.send(f"🎉 |`HERE'S YOUR REDEEM RESULTS!` {mention}")
+            await interaction.channel.send(embed=embed)
             
         except Exception as e:
             await interaction.followup.send(
@@ -222,38 +224,19 @@ class GroupRedeem(commands.Cog):
             print(f"Debug: Screenshot saved as {filename}")
         except Exception as e:
             print(f"Failed to take screenshot: {e}")
-
-    async def _send_debug_screenshots(self, interaction, folder, player_id):
-        try:
-            files = []
-            for file in os.listdir(folder):
-                if f"_{player_id}.png" in file:
-                    files.append(discord.File(f"{folder}/{file}"))
-            
-            if files:
-                await interaction.followup.send(
-                    f"📷 Screenshots debug for ID {player_id}:",
-                    files=files,
-                    ephemeral=True
-                )
-                
-                for file in files:
-                    os.remove(file.filename)
-        except Exception as e:
-            print(f"Failed to send screenshot: {e}")
     
     class GroupList(ui.Select):
         def __init__(self, groups: Dict[str, List[str]]):
             options = [
                 discord.SelectOption(
                     label=group_name,
-                    description=f"{len(ids)} IDs",
+                    description=f"{len(ids)} IDs\nTap to view",
                     value=group_name
                 ) for group_name, ids in groups.items()
             ]
 
             super().__init__(
-                placeholder="Select a group...",
+                placeholder="Select a group",
                 options=options,
                 max_values=1
             )
@@ -343,8 +326,7 @@ class GroupRedeem(commands.Cog):
                 )
 
                 await interaction.response.send_message(
-                    f"✅ Group **{self.group_name.value}** created with {len(id_list)} IDs!",
-                    ephemeral=True
+                    f"✅ Group **{self.group_name.value}** created with {len(id_list)} IDs!"
                 )
             except Exception as e:
                 await interaction.response.send_message(
@@ -404,9 +386,8 @@ class GroupRedeem(commands.Cog):
                 view = ui.View()
                 view.add_item(cog.GroupList(user_groups))
                 await interaction.response.send_message(
-                    "📋 Select a group to view details:",
-                    view=view,
-                    ephemeral=True
+                    "📋 Select a group: ",
+                    view=view
                 )
     class GroupRedeemModal(ui.Modal, title="Group Redemption"):
         def __init__(self, cog, user_id: str, group_name: str):
@@ -416,7 +397,7 @@ class GroupRedeem(commands.Cog):
             self.group_name = group_name
             self.code = ui.TextInput(
                 label="Gift Code",
-                placeholder="Enter the gift code to redeem",
+                placeholder="Enter a gift code",
                 max_length=20
             )
             self.add_item(self.code)
@@ -449,9 +430,8 @@ class GroupRedeem(commands.Cog):
         view.add_item(self.GroupSelection(list(user_groups.keys())))
         
         await interaction.response.send_message(
-            "🎪 Group Redeem System - Select an option:",
-            view=view,
-            ephemeral=True
+            "🎪 Group Redeem Menu:",
+            view=view
         )
 
     @commands.Cog.listener()
@@ -574,7 +554,7 @@ class GroupRedeem(commands.Cog):
     # ========== MAIN FUNCTIONS ===========
     async def open_website(self, driver):
         await self.bot.loop.run_in_executor(None, lambda: driver.get(self.REDEEM_URL))
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
         return True
         
     
@@ -611,7 +591,7 @@ class GroupRedeem(commands.Cog):
                 arguments[0].dispatchEvent(hoverEvent);
             """, id_field) 
         )
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(0.5)
         return True
     
     async def login(self, driver):
@@ -639,7 +619,7 @@ class GroupRedeem(commands.Cog):
                 }, 1000);
             """, login_button)
         )
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
 
         await self.bot.loop.run_in_executor(
             None,
@@ -668,7 +648,7 @@ class GroupRedeem(commands.Cog):
         
         await self.input_text(driver, code_field, code)
         print(f"Successfully input: {code} as a gift code!")
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
         return True
     
     async def captcha_solver(self, driver, interaction):
@@ -686,6 +666,7 @@ class GroupRedeem(commands.Cog):
                 return False
             
             captcha_file = 'captcha.png'
+            mention = interaction.user.mention
             try:
                 await self.bot.loop.run_in_executor(
                     None,
@@ -695,9 +676,8 @@ class GroupRedeem(commands.Cog):
                 if not os.path.exists(captcha_file):
                     await self.send_message("❌ Failed to create captcha image!", interaction)
                     return False
-                    
-                await self.send_file(captcha_file, interaction)
-                await self.send_message("⌛ Please enter the 4-digit captcha code within 60 seconds...", interaction)
+                await interaction.channel.send(f"👤 |{mention}, `HERE IS THE CAPTCHA`\n⌛ |`PLEASE INPUT THE CODE WITHIN 60s:`")
+                await interaction.channel.send(file=discord.File(captcha_file))
                 
             except Exception as e:
                 print(f"Error saving captcha: {e}")
@@ -753,7 +733,7 @@ class GroupRedeem(commands.Cog):
         ], 'lime')
 
         await self.bot.loop.run_in_executor(None, lambda: driver.execute_script("arguments[0].click();", confirm_button))
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
         
         try:
             await self.bot.loop.run_in_executor(
