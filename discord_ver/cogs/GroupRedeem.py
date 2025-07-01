@@ -158,7 +158,7 @@ class GroupRedeem(commands.Cog):
                         'Incorrect': '❌ **Error**: Captcha code incorrect.',
                         'Please': '⚠️ **Warning**: Please relog-in with correct character!',
                         'already': '❎ **Error**: Code was already claimed.',
-                        'not found': '❓ **Error**: Gift code was not found.',
+                        'not found': '❌ **Error**: Gift code was not found.',
                         'Expired': '✖️ **Error**: Gift code expired, unable to claim.',
                         'Claim': '✖️ **Error**: Claim limit reached.'
                     }
@@ -188,7 +188,7 @@ class GroupRedeem(commands.Cog):
                         await self.bot.loop.run_in_executor(None, driver.quit)
                     await asyncio.sleep(0.5)
 
-            red_count = any("❌" in r or "❓" in r for r in results)
+            red_count = all("❌" in r for r in results)
             yellow_count = any("⚠️" in r or "✖️" in r or "❎" in r for r in results)
 
             if red_count:
