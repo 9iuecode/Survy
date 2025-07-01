@@ -188,10 +188,20 @@ class GroupRedeem(commands.Cog):
                         await self.bot.loop.run_in_executor(None, driver.quit)
                     await asyncio.sleep(0.5)
 
+            red_count = any("❌" in r or "❓" in r for r in results)
+            yellow_count = any("⚠️" in r or "✖️" in r or "❎" in r for r in results)
+
+            if red_count:
+                color = discord.Color.red()
+            elif yellow_count:
+                color = discord.Color.orange()
+            else:
+                color = discord.Color.green()
+
             embed = discord.Embed(
-                title=f"{group_name} GROUP RESULTS:",
+                title=f"[{group_name} GROUP] | RESULTS:",
                 description="\n".join(results),
-                color=discord.Color.green() if any("✅" in r for r in results) else discord.Color.red()
+                color=color
             )
             embed.set_author(
                 name="Survy REDEEM",
@@ -202,6 +212,8 @@ class GroupRedeem(commands.Cog):
             embed.set_footer(
                 text=f"Date: {hari}\nTime: {jam}\n💖 Thank you for using Survy, have a great day! 💖"
             )
+            await interaction.channel.send(f"☄️ |`ALL {len(group_ids)} IDS IN [{group_name}] GROUP IS DONE`")
+            await asyncio.sleep(1)
             await interaction.channel.send(f"🎉 |`HERE'S YOUR REDEEM RESULTS!` {mention}")
             await interaction.channel.send(embed=embed)
             
@@ -214,16 +226,6 @@ class GroupRedeem(commands.Cog):
         finally:
             if driver:
                 await self.bot.loop.run_in_executor(None, driver.quit)
-
-    async def _take_screenshot(self, driver, filename):
-        try:
-            await self.bot.loop.run_in_executor(
-                None,
-                lambda: driver.save_screenshot(filename)
-            )
-            print(f"Debug: Screenshot saved as {filename}")
-        except Exception as e:
-            print(f"Failed to take screenshot: {e}")
     
     class GroupList(ui.Select):
         def __init__(self, groups: Dict[str, List[str]]):
@@ -236,7 +238,7 @@ class GroupRedeem(commands.Cog):
             ]
 
             super().__init__(
-                placeholder="Select a group",
+                placeholder="👨‍👩‍👧‍👦 Select a group..",
                 options=options,
                 max_values=1
             )
@@ -246,23 +248,23 @@ class GroupRedeem(commands.Cog):
             user_id = str(interaction.user.id)
             group_name = self.values[0]
             user_groups = await cog.load_user_groups(user_id)
-            group_data = user_groups.get(group_name, [])
 
             embed = discord.Embed(
-                title=f"{group_name} Group",
-                color=discord.Color.yellow()
+                title=f"Group: {group_name}",
+                description=f"Members: {len(user_groups[group_name])}"
             )
 
             embed.add_field(
-                name="Members IDs",
-                value="\n".join(f"`{player_ids}`" for player_ids in group_data) or "No IDs",
+                name="Player IDs",
+                value="\n".join(user_groups[group_name]) or "No members",
                 inline=False
             )
-
+        
             view = cog.GroupActionView(group_name)
-            await interaction.response.edit_message(
+            await interaction.response.send_message(
                 embed=embed,
-                view=view
+                view=view,
+                ephemeral=False
             )
 
     class CreateGroupModal(ui.Modal, title="Create New Group"):
@@ -362,15 +364,31 @@ class GroupRedeem(commands.Cog):
             ))
 
     class GroupSelection(ui.Select):
-        def __init__(self, groups: List[str]):
+        def __init__(self,  groups: Dict[str, List[str]]):
             options = [
                 discord.SelectOption(label="Create a group", value="new", emoji="🆕"),
                 discord.SelectOption(label="Group list", value="list", emoji="📃")
             ]
-            super().__init__(placeholder="Select action...", options=options)
+
+            for group_name, members in groups.items():
+                options.append(
+                    discord.SelectOption(
+                        label=f"📁 {group_name}", 
+                        value=f"group_{group_name}",
+                        description=f"{len(members)} IDs | Click to view"
+                    )
+                )
+            
+            super().__init__(
+                placeholder="Select action..",
+                options=options,
+                max_values=1
+            )
+
 
         async def callback(self, interaction: discord.Interaction):
             cog = interaction.client.get_cog("GroupRedeem")
+            selected = self.values[0]
             if self.values[0] == "new":
                 await interaction.response.send_modal(cog.CreateGroupModal())
             
@@ -386,9 +404,33 @@ class GroupRedeem(commands.Cog):
                 view = ui.View()
                 view.add_item(cog.GroupList(user_groups))
                 await interaction.response.send_message(
-                    "📋 Select a group: ",
+                    "📋 Select a group to manage: ",
                     view=view
                 )
+            
+            elif selected.startswith("group_"):
+                group_name = selected[6:]
+                user_groups = await cog.load_user_groups(str(interaction.user.id))
+
+                if group_name in user_groups:
+                    embed = discord.Embed(
+                        title=f"Group: {group_name}",
+                        description=f"Members: {len(user_groups[group_name])}"
+                    )
+
+                    embed.add_field(
+                        name="Player IDs",
+                        value="\n".join(user_groups[group_name]) or "No members",
+                        inline=False
+                    )
+                
+                    view = cog.GroupActionView(group_name)
+                    await interaction.response.send_message(
+                        embed=embed,
+                        view=view,
+                        ephemeral=False
+                    )
+
     class GroupRedeemModal(ui.Modal, title="Group Redemption"):
         def __init__(self, cog, user_id: str, group_name: str):
             super().__init__()
@@ -427,7 +469,7 @@ class GroupRedeem(commands.Cog):
 
         user_groups = await self.load_user_groups(str(interaction.user.id))
         view = ui.View()
-        view.add_item(self.GroupSelection(list(user_groups.keys())))
+        view.add_item(self.GroupSelection(user_groups))
         
         await interaction.response.send_message(
             "🎪 Group Redeem Menu:",
