@@ -3,6 +3,7 @@ import asyncio
 import traceback
 import os
 import sqlite3
+import aiosqlite
 from datetime import datetime
 from pathlib import Path
 from discord.ext import commands
@@ -41,34 +42,26 @@ class GroupRedeem(commands.Cog):
     
     async def load_user_groups(self, user_id: str) -> Dict[str, List[str]]:
         groups = {}
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute(
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
                 "SELECT group_name, player_ids FROM user_groups WHERE user_id = ?",
                 (user_id,)
-            )
-            for group_name, ids_str in cursor.fetchall():
-                groups[group_name] = ids_str.split(',')
+            ) as cursor:
+                rows = await cursor.fetchall()
+                for group_name, ids_str in rows:
+                    groups[group_name] = ids_str.split(',')
         return groups
     
     async def save_user_group(self, user_id: str, group_name: str, player_ids: List[str]):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
                 """
                 INSERT OR REPLACE INTO user_groups (user_id, group_name, player_ids)
                 VALUES (?, ?, ?)
                 """,
                 (user_id, group_name, ','.join(player_ids))
             )
-            conn.commit()
-    
-    async def delete_user_group(self, user_id: str, group_name: str):
-        """Delete a user group"""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "DELETE FROM user_groups WHERE user_id = ? AND group_name = ?",
-                (user_id, group_name)
-            )
-            conn.commit()
+            await db.commit()
     
     def setup_driver(self):
         options = webdriver.ChromeOptions()
@@ -226,19 +219,88 @@ class GroupRedeem(commands.Cog):
         finally:
             if driver:
                 await self.bot.loop.run_in_executor(None, driver.quit)
+
+    async def rename_user_group(self, user_id: str, new_name: str, old_name: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE user_groups SET group_name = ? WHERE user_id = ? AND group_name = ?",
+                (new_name, user_id, old_name)
+            )
+            await db.commit()
     
+    async def add_new_ids(self, user_id: str, group_name: str, new_ids: List[str]):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT player_ids FROM user_groups WHERE user_id = ? AND group_name = ?",
+                (user_id, group_name)
+            ) as cursor:
+                comma = await cursor.fetchone()
+
+            existing_ids = comma[0].split(',')
+            updated_ids = list(set(existing_ids + new_ids))
+
+            await db.execute(
+                "UPDATE user_groups SET player_ids = ? WHERE user_id = ? AND group_name = ?",
+                (','.join(updated_ids), user_id, group_name)
+            )
+            await db.commit()
+
+    async def delete_ids(self, user_id: str, group_name: str, ids_remove: List[str]):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT player_ids FROM user_groups WHERE user_id = ? AND group_name = ?",
+                (user_id, group_name)
+            ) as cursor:
+                comma = await cursor.fetchone()
+
+            existing_ids = comma[0].split(',')
+            updated_ids = [pid for pid in existing_ids if pid not in ids_remove]
+
+            if not updated_ids:
+                raise ValueError("Cannot delete all ids in one group")
+
+            await db.execute(
+                "UPDATE user_groups SET player_ids = ? WHERE user_id = ? AND group_name = ?",
+                (','.join(updated_ids), user_id, group_name)
+            )
+            await db.commit()
+
+    async def delete_user_group(self, user_id: str, group_name: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                async with db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type= 'table' AND name= 'user_groups'"
+                ) as cursor:
+                    if not await cursor.fetchone():
+                        raise ValueError("table 'user_groups' does not exist")
+                
+                await db.execute(
+                    "DELETE FROM user_groups WHERE user_id = ? AND group_name = ?",
+                    (user_id, group_name)
+                )
+                await db.commit()
+                
+                async with db.execute(
+                    "SELECT 1 FROM user_groups WHERE user_id = ? AND group_name = ?",
+                    (user_id, group_name)
+                ) as cursor:
+                    return not await cursor.fetchone()
+            except aiosqlite.Error as e:
+                print(f"[Database Error] failed to delete: {str(e)}")
+                return False
+        
     class GroupList(ui.Select):
         def __init__(self, groups: Dict[str, List[str]]):
             options = [
                 discord.SelectOption(
-                    label=group_name,
-                    description=f"{len(ids)} IDs\nTap to view",
+                    label=f"📁 {group_name}",
+                    description=f"{len(ids)} IDs | Tap to view",
                     value=group_name
                 ) for group_name, ids in groups.items()
             ]
 
             super().__init__(
-                placeholder="👨‍👩‍👧‍👦 Select a group..",
+                placeholder="Select action",
                 options=options,
                 max_values=1
             )
@@ -294,7 +356,7 @@ class GroupRedeem(commands.Cog):
             raw_ids = [id.strip() for id in self.player_ids.value.split(',')]
             id_list = []
             
-            for player_id in raw_ids[:10]:
+            for player_id in raw_ids[:50]:
                 if player_id and player_id.isdigit() and len(player_id) >= 7:
                     id_list.append(player_id)
                 else:
@@ -337,6 +399,107 @@ class GroupRedeem(commands.Cog):
                 )
                 traceback.print_exc()
 
+    class RenameGroupModal(ui.Modal, title="Rename Group Name"):
+        def __init__(self, old_name: str):
+            super().__init__()
+            self.old_name = old_name
+            self.new_name = ui.TextInput(
+                label="New Name",
+                placeholder=f"Previous Name: {old_name}",
+                default=old_name
+            )
+
+            self.add_item(self.new_name)
+
+        async def on_submit(self, interaction: discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            new_name = self.new_name.value.strip()
+
+            if not new_name:
+                return await interaction.channel.send("❌ Name cannot be empty")
+            
+            if new_name == self.old_name:
+                return await interaction.channel.send("⚠️ New name cannot be same as previous name")
+            
+            try:
+                await cog.rename_user_group(
+                    user_id=str(interaction.user.id),
+                    old_name=self.old_name,
+                    new_name=new_name
+                )
+
+                await interaction.response.send_message(f"✅ Group name has been successfully changed to **{new_name}**")
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Failed to rename: {str(e)}", ephemeral=True)
+            
+    class AddIdModal(ui.Modal, title="Add New Member Id"):
+        def __init__(self, group_name: str):
+            super().__init__()
+            self.group_name = group_name
+            self.new_ids = ui.TextInput(
+                label="Player Id (Seperate with comma ',')",
+                placeholder="Example: 123456, 789101",
+                style=discord.TextStyle.paragraph
+            )
+            self.add_item(self.new_ids)
+
+        async def on_submit(self, interaction:discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            raw_ids = [id.strip() for id in self.new_ids.value.split(',')]
+            valid_ids = []
+
+            for pid in raw_ids:
+                if pid.isdigit() and len(pid) >= 7:
+                    valid_ids.append(pid)
+                else:
+                    await interaction.channel.send(f"⚠️ {pid} is invalid")
+                
+            if not valid_ids:
+                return print("There's no valid id")
+            
+            try:
+                await cog.add_new_ids(
+                    user_id=str(interaction.user.id),
+                    group_name=self.group_name,
+                    new_ids=valid_ids
+                )
+                
+                await interaction.channel.send(f"✅ Successfully added {len(valid_ids)} to **{self.group_name}**")
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Failed to add ids: {str(e)}", ephemeral=True)
+    
+    class DeleteIds(ui.Select):
+        def __init__(self, group_name: str, current_ids: List[str]):
+            options = [
+                discord.SelectOption(
+                    label=f"ID: {pid}",
+                    value=pid,
+                    description="Click to delete"
+                ) for pid in current_ids
+            ]
+
+            super().__init__(
+                placeholder="Select id you want to remove..",
+                options=options,
+                max_values=len(options)
+            )
+            self.group_name = group_name
+        
+        async def callback(self, interaction: discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            remove_ids = self.values
+
+            try:
+                await cog.delete_ids(
+                    user_id=str(interaction.user.id),
+                    group_name=self.group_name,
+                    ids_remove=remove_ids
+                )
+
+                await interaction.channel.send(f"✅ Successfully deleted {len(remove_ids)} from **{self.group_name}**")
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Failed to remove: {str(e)}")
+
     class GroupActionView(ui.View):
         def __init__(self, group_name: str):
             super().__init__()
@@ -363,6 +526,85 @@ class GroupRedeem(commands.Cog):
                 custom_id=f"delete_{group_name}"
             ))
 
+    class EditGroupView(ui.View):
+        def __init__(self, group_name: str):
+            super().__init__()
+            self.group_name = group_name
+
+            self.add_item(ui.Button(
+                style=discord.ButtonStyle.blurple,
+                label="Rename",
+                emoji="📝",
+                custom_id=f"rename_{group_name}"
+            ))
+
+            self.add_item(ui.Button(
+                style=discord.ButtonStyle.blurple,
+                label="Add Member",
+                emoji="🅰️",
+                custom_id=f"add_mem_{group_name}"
+            ))
+
+            self.add_item(ui.Button(
+                style=discord.ButtonStyle.red,
+                label="Delete Member",
+                emoji="💣",
+                custom_id=f"delete_mem_{group_name}"
+            ))
+
+    class DeleteGroupView(ui.View):
+        def __init__(self, group_name: str):
+            super().__init__(timeout=30)
+            self.group_name = group_name
+
+            confirm_button = (ui.Button(
+                style=discord.ButtonStyle.red,
+                label="YES",
+                emoji="💥",
+                custom_id=f"confirm_delete_{group_name}"
+            ))
+
+            confirm_button.callback = self.confirm_callback
+            self.add_item(confirm_button)
+
+            cancel_button = (ui.Button(
+                style=discord.ButtonStyle.gray,
+                label="Cancel",
+                emoji="🔙",
+                custom_id=f"cancel_delete_{group_name}"
+            ))
+
+            cancel_button.callback = self.cancel_callback
+            self.add_item(cancel_button)
+
+        async def confirm_callback(self, interaction: discord.Interaction):
+            cog = interaction.client.get_cog("GroupRedeem")
+            success = await cog.delete_user_group(
+                user_id=str(interaction.user.id),
+                group_name=self.group_name
+            )
+            
+            if success:
+                await interaction.response.edit_message(
+                    content = f"✅ Successfully Deleted **{self.group_name}** Group",
+                    embed=None,
+                    view=None
+                )
+            
+            else:
+                await interaction.response.edit_message(
+                    content = f"❌ Failed to Delete **{self.group_name}** Group",
+                    embed=None,
+                    view=None
+                )
+        async def cancel_callback(self, interacion: discord.Interaction):
+            await interacion.response.edit_message(
+                content = f"🔃 Delete Canceled on **{self.group_name}** Group",
+                embed=None,
+                view=None,
+                delete_after=3
+            )
+            
     class GroupSelection(ui.Select):
         def __init__(self,  groups: Dict[str, List[str]]):
             options = [
@@ -404,7 +646,7 @@ class GroupRedeem(commands.Cog):
                 view = ui.View()
                 view.add_item(cog.GroupList(user_groups))
                 await interaction.response.send_message(
-                    "📋 Select a group to manage: ",
+                    "📋 Group list: ",
                     view=view
                 )
             
@@ -457,7 +699,7 @@ class GroupRedeem(commands.Cog):
 
     @app_commands.command(
         name="gredeem",
-        description="Make a group and do multiple redeem in one command"
+        description="Make a group and do multiple redeem in one flow"
     )
     async def group_redeem(self, interaction: discord.Interaction):
         if interaction.channel.id not in self.CHANNEL_ID:
@@ -472,7 +714,7 @@ class GroupRedeem(commands.Cog):
         view.add_item(self.GroupSelection(user_groups))
         
         await interaction.response.send_message(
-            "🎪 Group Redeem Menu:",
+            "🎪 Group redeem menu:",
             view=view
         )
 
@@ -489,19 +731,72 @@ class GroupRedeem(commands.Cog):
                 group_name = custom_id[7:]
                 user_groups = await self.load_user_groups(user_id)
                 if group_name not in user_groups:
-                    await interaction.response.send_message("❌ Group not found!", ephemeral=True)
+                    await interaction.channel.send("❌ Group not found!")
                     return
             
                 await interaction.response.send_modal(self.GroupRedeemModal(self, user_id, group_name))
             
             elif custom_id.startswith("edit_"):
-                await self._handle_edit_group(interaction, user_id, custom_id[5:])
+                group_name = custom_id[5:]
+                user_groups = await self.load_user_groups(user_id)
+                if group_name not in user_groups:
+                    await interaction.channel.send("❌ Group not found!")
+                
+                view = self.EditGroupView(group_name)
+                await interaction.channel.send(
+                    f"Editing **{group_name}** Group",
+                    view=view
+                )
             
+            elif custom_id.startswith("rename_"):
+                group_name = custom_id[7:]
+                await interaction.response.send_modal(
+                    self.RenameGroupModal(old_name=group_name)
+                )
+            
+            elif custom_id.startswith("add_mem_"):
+                group_name = custom_id[8:]
+                await interaction.response.send_modal(
+                    self.AddIdModal(group_name=group_name)
+                )
+            
+            elif custom_id.startswith("delete_mem_"):
+                group_name = custom_id[11:]
+                user_groups = await self.load_user_groups(user_id)
+
+                if group_name not in user_groups:
+                    await interaction.channel.send("❌ Group not found")
+                
+                if not user_groups[group_name]:
+                    await interaction.channel.send("❌ Group has no member")
+                
+                view = ui.View()
+                view.add_item(self.DeleteIds(group_name, user_groups[group_name]))
+                await interaction.response.send_message(
+                    f"Select members to remove from **{group_name}**:",
+                    view=view
+                )
+
             elif custom_id.startswith("delete_"):
-                await self._handle_delete_group(interaction, user_id, custom_id[7:])
+                group_name = custom_id[7:]
+                user_groups = await self.load_user_groups(user_id)
+
+                if group_name not in user_groups:
+                    await interaction.channel.send("❌ Group isn't there")
+                
+                del_confirm = discord.Embed(
+                    description=f"🥲 Are you sure wanted to delete **{group_name}** from your list?",
+                    color=discord.Color.red()
+                )
+
+                view = self.DeleteGroupView(group_name)
+                await interaction.response.send_message(
+                    embed=del_confirm,
+                    view=view
+                )
                 
         except Exception as e:
-            print(f"Error handling interaction: {e}")
+            print(f"Error handling interaction: {str(e)}")
             traceback.print_exc()
 
     # ========== SUPPORT FUNCTIONS ===========
