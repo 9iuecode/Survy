@@ -965,7 +965,7 @@ class GroupRedeem(commands.Cog):
             )
         )
         print("Log-in successful!")
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(0.5)
         return True
     
     async def input_gift_code(self, driver, code):
@@ -1085,7 +1085,7 @@ class GroupRedeem(commands.Cog):
                 None,
                 lambda: actions.move_to_element(confirm_button).click().perform()
             )
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
             return True
 
     

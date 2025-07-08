@@ -133,19 +133,17 @@ class PersonalRedeem(commands.Cog):
             await interaction.response.send_message(
                 "Choose redeem options: ",
                 view=view,
-                ephemeral=True
+                ephemeral=False
             )
 
         async def redeem_with_current_id(self, interaction: discord.Interaction, code: str):
             await interaction.response.defer(thinking=True)
+            await interaction.followup.send("RE-REDEEM BEGIN!")
             driver = self.cog.setup_driver()
             
             try:
                 await self._click_confirm_after(driver, interaction)
-                update = await self.cog._setup_update_message(interaction)
-                send_msg = lambda content, ephemeral=False: self.cog._send_msg(interaction, content, ephemeral)
-                send_file = lambda file_path: self.cog._send_file(interaction, file_path)
-
+                await interaction.channel.send("🔃 |`Starting to re-redeem`\n🍳 |`Let's cook again!`")
                 if not await self.cog._open_website(driver):
                     return
 
@@ -155,16 +153,17 @@ class PersonalRedeem(commands.Cog):
                 if not await self.cog._login(driver):
                     return
 
-                if not await self.cog._input_gift_code(driver, code, interaction):
+                if not await self.cog._input_gift_code(driver, code):
                     return
 
-                captcha_result = await self.cog._restart_captcha(driver, interaction, send_file)
+                captcha_result = await self.cog._restart_captcha(driver, interaction)
                 if not captcha_result:
                     return
 
                 if not await self.cog._confirm_redemption(driver):
                     return
 
+                await interaction.channel.send("🎉 |`Here's your redeem result!`")
                 await self.cog._get_redemption_result(driver, self.player_id, code, interaction)
 
             except Exception as e:
@@ -174,34 +173,32 @@ class PersonalRedeem(commands.Cog):
             
         async def redeem_with_new_id(self, interaction: discord.Interaction, new_id, code: str):
             await interaction.response.defer(thinking=True)
+            await interaction.followup.send("RE-REDEEM BEGIN!")
             driver = self.cog.setup_driver()
 
             try:
                 await self._click_confirm_after(driver, interaction)
-                update = await self.cog._setup_update_message(interaction)
-                send_msg = lambda content, ephemeral=False: self.cog._send_msg(interaction, content, ephemeral)
-                send_file = lambda file_path: self.cog._send_file(interaction, file_path)
-
-                if not await self.cog._open_website(driver, update):
+                await interaction.channel.send("🔃 |`Starting to re-redeem`\n🍳 |`Let's cook again!`")
+                if not await self.cog._open_website(driver,):
                     return
                 
                 if not await self._retreat_for_new_id(driver, interaction, new_id):
                     return
 
-                if not await self.cog._login(driver, update):
+                if not await self.cog._login(driver):
                     return
 
-                if not await self.cog._input_gift_code(driver, code, update, interaction):
+                if not await self.cog._input_gift_code(driver, code):
                     return
 
-                captcha_result = await self.cog._solve_captcha(driver, interaction, update, send_file)
+                captcha_result = await self.cog._solve_captcha(driver, interaction)
                 if not captcha_result:
                     return
 
-                if not await self.cog._confirm_redemption(driver, update):
+                if not await self.cog._confirm_redemption(driver):
                     return
-
-                await self.cog._get_redemption_result(driver, self.player_id, code, interaction, update)
+                await interaction.channel.send("🎉 |`Here's your redeem result!`")
+                await self.cog._get_redemption_result(driver, self.player_id, code, interaction)
 
             except Exception as e:
                 await interaction.followup.send(f"💀 Fatal Error: {str(e)}")
@@ -221,7 +218,7 @@ class PersonalRedeem(commands.Cog):
                         None,
                         lambda: driver.execute_script("arguments[0].click();", confirm_after)
                     )
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(0.5)
                     return True
             except Exception as e:
                 print(f"Click Error: {e}")
@@ -238,14 +235,12 @@ class PersonalRedeem(commands.Cog):
                 ],  'red')
                 
                 if exit_button:
-                    await interaction.followup.send("Clicking retreat button...", ephemeral=True)
                     await self.cog.bot.loop.run_in_executor(
                         None,
                         lambda: driver.execute_script("arguments[0].click()", exit_button)
                     )
                     await asyncio.sleep(1)
                 
-                await interaction.followup.send("🧹 Clearing previous id...", ephemeral=True)
                 id_field = await self.cog._find_element(driver, [
                     '//input[contains(@type, "text") and contains(@placeholder, "Player ID")]'
                 ],  'blue')
@@ -262,11 +257,8 @@ class PersonalRedeem(commands.Cog):
                         arguments[0].dispatchEvent(new Event('change', {bubbles: true}));
                     """, id_field)
                 )
-                await asyncio.sleep(0.5)
-                
-                await interaction.followup.send(f"📩 Inputting {new_id} into the field...", ephemeral=True)
                 await self.cog._input_text(driver, id_field, new_id)
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.5)
 
                 return True
             except Exception as e:
@@ -280,16 +272,6 @@ class PersonalRedeem(commands.Cog):
     async def _send_file(self, interaction, file_path: str):
         with open(file_path, 'rb') as f:
             await interaction.followup.send(file=discord.File(f))
-    
-    async def _setup_update_message(self, interaction):
-        recent_message = await interaction.followup.send("🤖 Processing to redeem...")
-        await asyncio.sleep(2)
-        
-        async def update(text=None):
-            await recent_message.edit(content=text)
-            await asyncio.sleep(0.3)
-        
-        return update
 
     async def _wait_for_page_load(self, driver):
         await self.bot.loop.run_in_executor(
@@ -352,7 +334,7 @@ class PersonalRedeem(commands.Cog):
     async def _open_website(self, driver):
         try:
             await self.bot.loop.run_in_executor(None, lambda: driver.get(self.REDEEM_URL))
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.5)
             return True
         except Exception as e:
             print (f"Failed to load web page\nError: {str(e)}")
@@ -392,7 +374,7 @@ class PersonalRedeem(commands.Cog):
                     arguments[0].dispatchEvent(hoverEvent);
                 """, id_field) 
             )
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(0.5)
             return True
         
         except Exception as e:
@@ -425,7 +407,7 @@ class PersonalRedeem(commands.Cog):
                     }, 1000);
                 """, login_button)
             )
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.5)
 
             await self.bot.loop.run_in_executor(
                 None,
@@ -466,7 +448,7 @@ class PersonalRedeem(commands.Cog):
             print(f"Invalid gift code: {str(e)}")
             return False
 
-    async def _solve_captcha(self, driver, interaction, send_file):
+    async def _solve_captcha(self, driver, interaction):
         try:
             captcha_element = await self._find_element(driver, [
                 '//img[contains(@src, "data:image") and contains(@class, "verify")]',
@@ -485,12 +467,11 @@ class PersonalRedeem(commands.Cog):
                 None,
                 lambda: captcha_element.screenshot(captcha_file)
             )
-            await send_file(captcha_file)
-
+            mention = interaction.user.mention
+            await interaction.channel.send(f"👤 |{mention}`Here's your CAPTCHA`\n⏳ |`Please input the code correctly within [60s]`")
+            await interaction.channel.send(file=discord.File(captcha_file))
             def check(m):
                 return m.author == interaction.user and m.channel == interaction.channel
-            
-            await interaction.followup.send("⌛Waiting for 60s, please input captcha code correctly")
             
             try:
                 msg = await self.bot.wait_for('message', timeout=60.0, check=check)
@@ -547,7 +528,7 @@ class PersonalRedeem(commands.Cog):
 
             try:
                 await self.bot.loop.run_in_executor(None, lambda: driver.execute_script("arguments[0].click();", confirm_button))
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.5)
                 
                 try:
                     await self.bot.loop.run_in_executor(
@@ -645,8 +626,7 @@ class PersonalRedeem(commands.Cog):
             )
             
             view = self.RedeemView(self, player_id, code)
-            await interaction.followup.send("🎉 Here's your redeem result!")
-            await interaction.followup.send(embed=embed, view=view)
+            await interaction.channel.send(embed=embed, view=view)
             return True
             
         except TimeoutException:
@@ -654,10 +634,8 @@ class PersonalRedeem(commands.Cog):
         except Exception as e:
             return f"Error Sistem: {str(e)}"
 
-    async def _restart_captcha(self, driver, interaction, send_file):
+    async def _restart_captcha(self, driver, interaction):
         try:
-            await interaction.followup.send(f"🛡️ Processing Re-captcha...")
-
             cap_reset = await self._find_element(driver, [
                 '//*[contains(@class, "reload_btn reload_btn")]',
                 '//img[contains(@class, "reload_btn reload_btn")]'
@@ -680,10 +658,6 @@ class PersonalRedeem(commands.Cog):
             lambda: driver.execute_script("arguments[0].click();", cap_reset)
             )
             await asyncio.sleep(3)
-
-            after_reset = 'after_reset.png'
-            await self.bot.loop.run_in_executor(None, lambda: driver.save_screenshot(after_reset))
-            await send_file(after_reset)
             
             re_captcha_element = await self._find_element(driver, [
                 '//img[contains(@src, "data:image") and contains(@class, "verify")]',
@@ -702,12 +676,12 @@ class PersonalRedeem(commands.Cog):
                 None,
                 lambda: re_captcha_element.screenshot(new_captcha_file)
             )
-            await send_file(new_captcha_file)
+            mention = interaction.user.mention
+            await interaction.channel.send(f"👤 |{mention}`Here's your re-CAPTCHA code`\n⏳ |`Please input the code correctly within [60s]`")
+            await interaction.channel.send(file=discord.File(new_captcha_file))
 
             def check(rm):
                 return rm.author == interaction.user and rm.channel == interaction.channel
-            
-            await interaction.followup.send("⌛Waiting for 60s, please input the code correctly", ephemeral=True)
             
             try:
                 re_msg = await self.bot.wait_for('message', timeout=60.0, check=check)
@@ -746,25 +720,22 @@ class PersonalRedeem(commands.Cog):
         description="Will redeem your Whiteout Survival gift-code personally",
     )
     @app_commands.describe(
-        player_id="your Player ID",
-        code="Gift-code to redeem"
+        player_id="Player ID",
+        code="Gift-code"
     )
     async def personal_redeem(self, interaction: discord.Interaction, player_id: str, code: str):
         if interaction.channel.id not in self.CHANNEL_ID:
             await interaction.response.send_message(
                 "❌ Survy commands can only be used on certain channel!")
             return
-
         await interaction.response.defer(thinking=True) 
         driver = self.setup_driver()
         
         try:
-            # Setup helper functions
-            update = await self._setup_update_message(interaction)
-            send_msg = lambda content, ephemeral=False: self._send_msg(interaction, content, ephemeral)
-            send_file = lambda file_path: self._send_file(interaction, file_path)
-
             # Execute redemption flow
+            await interaction.followup.send("LET'S BEGIN!")
+            await asyncio.sleep(0.2)
+            await interaction.channel.send("🤖 |`Starting your personal redeem`\n🍳 |`Let me cook for you ~`")
             if not await self._open_website(driver):
                 return
 
@@ -776,14 +747,16 @@ class PersonalRedeem(commands.Cog):
 
             if not await self._input_gift_code(driver, code):
                 return
-
-            captcha_result = await self._solve_captcha(driver, interaction, send_file)
+            
+            captcha_result = await self._solve_captcha(driver, interaction)
             if not captcha_result:
                 return
 
             if not await self._confirm_redemption(driver):
                 return
 
+            await interaction.channel.send("🎉 |`Here's your redeem result!`")
+            await asyncio.sleep(0.5)
             await self._get_redemption_result(driver, player_id, code, interaction)
 
         except Exception as e:
