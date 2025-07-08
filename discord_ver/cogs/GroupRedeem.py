@@ -479,7 +479,7 @@ class GroupRedeem(commands.Cog):
             ]
 
             super().__init__(
-                placeholder="Select id you want to remove..",
+                placeholder="Select id",
                 options=options,
                 max_values=len(options)
             )
@@ -496,7 +496,7 @@ class GroupRedeem(commands.Cog):
                     ids_remove=remove_ids
                 )
 
-                await interaction.channel.send(f"✅ Successfully deleted {len(remove_ids)} from **{self.group_name}**")
+                await interaction.response.send_message(f"✅ Successfully deleted {len(remove_ids)} from **{self.group_name}**")
             except Exception as e:
                 await interaction.response.send_message(f"❌ Failed to remove: {str(e)}")
 
@@ -731,7 +731,7 @@ class GroupRedeem(commands.Cog):
                 group_name = custom_id[7:]
                 user_groups = await self.load_user_groups(user_id)
                 if group_name not in user_groups:
-                    await interaction.channel.send("❌ Group not found!")
+                    await interaction.response.send_message("❌ Group not found!")
                     return
             
                 await interaction.response.send_modal(self.GroupRedeemModal(self, user_id, group_name))
@@ -740,10 +740,10 @@ class GroupRedeem(commands.Cog):
                 group_name = custom_id[5:]
                 user_groups = await self.load_user_groups(user_id)
                 if group_name not in user_groups:
-                    await interaction.channel.send("❌ Group not found!")
+                    await interaction.response.send_message("❌ Group not found!")
                 
                 view = self.EditGroupView(group_name)
-                await interaction.channel.send(
+                await interaction.response.send_message(
                     f"Editing **{group_name}** Group",
                     view=view
                 )
@@ -765,10 +765,10 @@ class GroupRedeem(commands.Cog):
                 user_groups = await self.load_user_groups(user_id)
 
                 if group_name not in user_groups:
-                    await interaction.channel.send("❌ Group not found")
+                    await interaction.response.send_message("❌ Group not found")
                 
                 if not user_groups[group_name]:
-                    await interaction.channel.send("❌ Group has no member")
+                    await interaction.response.send_message("❌ Group has no member")
                 
                 view = ui.View()
                 view.add_item(self.DeleteIds(group_name, user_groups[group_name]))
@@ -782,7 +782,7 @@ class GroupRedeem(commands.Cog):
                 user_groups = await self.load_user_groups(user_id)
 
                 if group_name not in user_groups:
-                    await interaction.channel.send("❌ Group isn't there")
+                    await interaction.response.send_message("❌ Group isn't there")
                 
                 del_confirm = discord.Embed(
                     description=f"🥲 Are you sure wanted to delete **{group_name}** from your list?",
