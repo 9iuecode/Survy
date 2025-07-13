@@ -172,6 +172,7 @@ class PersonalRedeem(commands.Cog):
                 await self.cog.bot.loop.run_in_executor(None, driver.quit)
             
         async def redeem_with_new_id(self, interaction: discord.Interaction, new_id, code: str):
+            self.player_id = new_id
             await interaction.response.defer(thinking=True)
             await interaction.followup.send("RE-REDEEM BEGIN!")
             driver = self.cog.setup_driver()
